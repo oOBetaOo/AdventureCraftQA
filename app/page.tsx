@@ -21,6 +21,7 @@ const PRIORITIES = [
   { v: "4", label: "Low", color: "#d8d8d8" },
 ];
 const SMALL_LIMIT = 4 * 1024 * 1024; // above this, go through Vercel Blob
+const REPORTER_KEY = "advc-reporter-id";
 
 function initials(p: Person) {
   if (p.initials) return p.initials;
@@ -39,9 +40,9 @@ function Avatar({ p }: { p: Person }) {
 }
 function ago(ms: number) {
   const d = (Date.now() - ms) / 1000;
-  if (d < 3600) return `${Math.max(1, Math.round(d / 60))} min fa`;
-  if (d < 86400) return `${Math.round(d / 3600)} h fa`;
-  return `${Math.round(d / 86400)} g fa`;
+  if (d < 3600) return `${Math.max(1, Math.round(d / 60))} min ago`;
+  if (d < 86400) return `${Math.round(d / 3600)} h ago`;
+  return `${Math.round(d / 86400)} d ago`;
 }
 function fmtSize(b: number) {
   return b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`;
@@ -68,7 +69,7 @@ export default function Page() {
     try {
       const r = await fetch("/api/tasks", { cache: "no-store" });
       const j = await r.json();
-      if (!r.ok) throw new Error(j.error || "Caricamento non riuscito");
+      if (!r.ok) throw new Error(j.error || "Couldn't load the QA subtasks");
       setTasks(j.tasks);
       setStatuses(j.statuses || []);
       setParentUrl(j.parent?.url || "");
@@ -151,29 +152,29 @@ export default function Page() {
     <>
       <header className="top">
         <div className="top-row">
-          <h1 className="brand">ADVC QA<small>Subtask di QA · AdventureCraft</small></h1>
+          <h1 className="brand">ADVC QA<small>QA subtasks · AdventureCraft</small></h1>
           <div className="spacer" />
-          {parentUrl && <a className="btn" href={parentUrl} target="_blank" rel="noreferrer">Apri in ClickUp</a>}
+          {parentUrl && <a className="btn" href={parentUrl} target="_blank" rel="noreferrer">Open in ClickUp</a>}
           <button className="btn" onClick={() => { setLoading(true); load(); }} disabled={loading}>
-            {loading ? "Aggiorno…" : "Aggiorna"}
+            {loading ? "Refreshing…" : "Refresh"}
           </button>
-          <button className="btn primary" onClick={() => setCreating(true)}>Nuova segnalazione</button>
+          <button className="btn primary" onClick={() => setCreating(true)}>New report</button>
         </div>
-        <div className="xp" aria-label={`${doneCount} di ${tasks.length} completate`}>
+        <div className="xp" aria-label={`${doneCount} of ${tasks.length} completed`}>
           <span className="xp-level">{doneCount}</span>
           <div className="xp-track"><div className="xp-fill" style={{ width: `${pct}%` }} /></div>
-          <span className="xp-label">{pct}% completate, {openCount} ancora aperte</span>
+          <span className="xp-label">{pct}% completed, {openCount} still open</span>
         </div>
       </header>
 
       <div className="shell">
         <aside className="side">
-          <h2>Stato</h2>
+          <h2>Status</h2>
           <button className="fbtn" aria-pressed={statusF === "open"} onClick={() => setStatusF("open")}>
-            Aperte <span className="n">{openCount}</span>
+            Open <span className="n">{openCount}</span>
           </button>
           <button className="fbtn" aria-pressed={statusF === "all"} onClick={() => setStatusF("all")}>
-            Tutte <span className="n">{tasks.length}</span>
+            All <span className="n">{tasks.length}</span>
           </button>
           {statusList.map((s) => (
             <button key={s.status} className="fbtn" aria-pressed={statusF === s.status.toLowerCase()} onClick={() => setStatusF(s.status.toLowerCase())}>
@@ -182,8 +183,8 @@ export default function Page() {
               <span className="n">{s.n}</span>
             </button>
           ))}
-          <h2>Assegnata a</h2>
-          <button className="fbtn who" aria-pressed={personF === "all"} onClick={() => setPersonF("all")}>Chiunque</button>
+          <h2>Assigned to</h2>
+          <button className="fbtn who" aria-pressed={personF === "all"} onClick={() => setPersonF("all")}>Anyone</button>
           {people.map((p) => (
             <button key={p.id} className="fbtn who" aria-pressed={personF === p.id} onClick={() => setPersonF(p.id)}>
               <Avatar p={p} /> <span>{p.username}</span> <span className="n">{p.n}</span>
@@ -191,25 +192,25 @@ export default function Page() {
           ))}
           {unassigned > 0 && (
             <button className="fbtn who" aria-pressed={personF === "none"} onClick={() => setPersonF("none")}>
-              Nessuno <span className="n">{unassigned}</span>
+              Unassigned <span className="n">{unassigned}</span>
             </button>
           )}
         </aside>
 
         <main className="main">
           <div className="toolbar">
-            <input className="search" type="search" placeholder="Cerca per titolo" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Cerca" />
-            <select className="select" value={sort} onChange={(e) => setSort(e.target.value as any)} aria-label="Ordina">
-              <option value="updated">Aggiornate di recente</option>
-              <option value="created">Create di recente</option>
-              <option value="priority">Priorità</option>
+            <input className="search" type="search" placeholder="Search by title" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" />
+            <select className="select" value={sort} onChange={(e) => setSort(e.target.value as any)} aria-label="Sort">
+              <option value="updated">Recently updated</option>
+              <option value="created">Recently created</option>
+              <option value="priority">Priority</option>
             </select>
           </div>
 
           {error && <div className="err">{error}</div>}
-          {loading && !tasks.length && <p className="empty">Carico le subtask da ClickUp…</p>}
+          {loading && !tasks.length && <p className="empty">Loading subtasks from ClickUp…</p>}
           {!loading && !error && !filtered.length && (
-            <p className="empty">Nessuna subtask con questi filtri. Cambia i filtri o crea una nuova segnalazione.</p>
+            <p className="empty">No subtasks match these filters. Change the filters or file a new report.</p>
           )}
 
           {grouped.map((g) => (
@@ -226,7 +227,7 @@ export default function Page() {
                   >
                     <div className="row-title">
                       <span className="t">{t.name}</span>
-                      <span className="row-meta">aggiornata {ago(t.dateUpdated)}{t.creator ? `, da ${t.creator}` : ""}</span>
+                      <span className="row-meta">updated {ago(t.dateUpdated)}{t.creator ? `, by ${t.creator}` : ""}</span>
                     </div>
                     {t.priority ? <span className="prio" style={{ color: t.priorityColor || undefined }}>{t.priority}</span> : <span />}
                     <span className="avatars">{t.assignees.map((a) => <Avatar key={a.id} p={a} />)}</span>
@@ -238,7 +239,17 @@ export default function Page() {
         </main>
       </div>
 
-      {openId && <Detail id={openId} onClose={() => setOpenId(null)} />}
+      {openId && (
+        <Detail
+          id={openId}
+          members={members}
+          onClose={() => setOpenId(null)}
+          onUpdated={(t) => {
+            setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, ...t } : x)));
+            setToast("Assignees updated on ClickUp");
+          }}
+        />
+      )}
       {creating && (
         <CreateForm
           members={members}
@@ -258,9 +269,16 @@ export default function Page() {
   );
 }
 
-function Detail({ id, onClose }: { id: string; onClose: () => void }) {
+function Detail({ id, members, onClose, onUpdated }: {
+  id: string;
+  members: Person[];
+  onClose: () => void;
+  onUpdated: (t: Task) => void;
+}) {
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [picked, setPicked] = useState<number[] | null>(null); // null = not editing
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
     fetch(`/api/tasks/${id}`).then(async (r) => {
       const j = await r.json();
@@ -268,6 +286,35 @@ function Detail({ id, onClose }: { id: string; onClose: () => void }) {
       setData(j);
     }).catch((e) => setErr(e.message));
   }, [id]);
+
+  async function saveAssignees() {
+    if (!picked) return;
+    setSaving(true); setErr(null);
+    try {
+      const r = await fetch(`/api/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignees: picked }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Couldn't update the assignees");
+      setData((d: any) => ({ ...d, task: j.task }));
+      onUpdated(j.task);
+      setPicked(null);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Members of the list, plus anyone already assigned who isn't listed (e.g. a guest).
+  const pool: Person[] = useMemo(() => {
+    const m = new Map<number, Person>();
+    members.forEach((p) => m.set(p.id, p));
+    (data?.task.assignees || []).forEach((p: Person) => { if (!m.has(p.id)) m.set(p.id, p); });
+    return [...m.values()];
+  }, [members, data]);
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", k);
@@ -277,22 +324,54 @@ function Detail({ id, onClose }: { id: string; onClose: () => void }) {
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Dettaglio subtask">
-        <button className="btn close" onClick={onClose}>Chiudi</button>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Subtask details">
+        <button className="btn close" onClick={onClose}>Close</button>
         {err && <div className="err">{err}</div>}
-        {!data && !err && <p className="empty">Carico…</p>}
+        {!data && !err && <p className="empty">Loading…</p>}
         {data && (
           <>
             <h2>{data.task.name}</h2>
             <p className="row-meta" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <span><span className="dot" style={{ background: data.task.statusColor, display: "inline-block", marginRight: 6 }} />{data.task.status}</span>
               {data.task.priority && <span className="prio" style={{ color: data.task.priorityColor }}>{data.task.priority}</span>}
-              <span className="avatars">{data.task.assignees.map((a: Person) => <Avatar key={a.id} p={a} />)}</span>
             </p>
-            {data.description ? <div className="desc">{data.description}</div> : <p className="hint">Nessuna descrizione.</p>}
+            <div className="field">
+              <span>Assignees</span>
+              {picked === null ? (
+                <div className="chips">
+                  {data.task.assignees.length
+                    ? data.task.assignees.map((a: Person) => (
+                        <span key={a.id} className="chip" style={{ cursor: "default" }}><Avatar p={a} />{a.username}</span>
+                      ))
+                    : <span className="hint" style={{ margin: 0 }}>Nobody assigned yet.</span>}
+                  <button type="button" className="btn" style={{ padding: "4px 12px" }}
+                    onClick={() => setPicked(data.task.assignees.map((a: Person) => a.id))}>
+                    Edit assignees
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="chips">
+                    {pool.map((m) => (
+                      <button type="button" key={m.id} className="chip" aria-pressed={picked.includes(m.id)} disabled={saving}
+                        onClick={() => setPicked((p) => (p!.includes(m.id) ? p!.filter((x) => x !== m.id) : [...p!, m.id]))}>
+                        <Avatar p={m} />{m.username}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="actions" style={{ marginTop: 10 }}>
+                    <button type="button" className="btn primary" onClick={saveAssignees} disabled={saving}>
+                      {saving ? "Saving…" : "Save assignees"}
+                    </button>
+                    <button type="button" className="btn" onClick={() => setPicked(null)} disabled={saving}>Cancel</button>
+                  </div>
+                </>
+              )}
+            </div>
+            {data.description ? <div className="desc">{data.description}</div> : <p className="hint">No description.</p>}
             {data.attachments.length > 0 && (
               <>
-                <h3 style={{ fontSize: 14, marginTop: 18, marginBottom: 0 }}>Allegati</h3>
+                <h3 style={{ fontSize: 14, marginTop: 18, marginBottom: 0 }}>Attachments</h3>
                 <div className="att">
                   {data.attachments.map((a: any) => (
                     <a key={a.id} href={a.url} target="_blank" rel="noreferrer">
@@ -304,13 +383,36 @@ function Detail({ id, onClose }: { id: string; onClose: () => void }) {
               </>
             )}
             <div className="actions">
-              <a className="btn primary" href={data.task.url} target="_blank" rel="noreferrer">Apri in ClickUp</a>
+              <a className="btn primary" href={data.task.url} target="_blank" rel="noreferrer">Open in ClickUp</a>
             </div>
           </>
         )}
       </aside>
     </>
   );
+}
+
+// Pulls image/video files out of a paste event (screenshots copied to the clipboard).
+function filesFromClipboard(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const out: File[] = [];
+  for (const item of Array.from(data.items || [])) {
+    if (item.kind !== "file") continue;
+    const f = item.getAsFile();
+    if (f && (f.type.startsWith("image/") || f.type.startsWith("video/"))) out.push(f);
+  }
+  if (!out.length) {
+    for (const f of Array.from(data.files || [])) {
+      if (f.type.startsWith("image/") || f.type.startsWith("video/")) out.push(f);
+    }
+  }
+  // Clipboard screenshots all arrive as "image.png": give each a unique, readable name.
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  return out.map((f, i) => {
+    if (f.name && f.name !== "image.png" && f.name !== "image") return f;
+    const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    return new File([f], `screenshot-${stamp}${out.length > 1 ? `-${i + 1}` : ""}.${ext}`, { type: f.type });
+  });
 }
 
 function CreateForm({ members, onClose, onCreated }: {
@@ -322,26 +424,55 @@ function CreateForm({ members, onClose, onCreated }: {
   const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState("");
   const [assignees, setAssignees] = useState<number[]>([]);
-  const [reporter, setReporter] = useState("");
+  const [reporterId, setReporterId] = useState<number | null>(null);
   const [files, setFiles] = useState<Pending[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [over, setOver] = useState(false);
   const [blobOn, setBlobOn] = useState(false);
+  const [pasted, setPasted] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  const filesRef = useRef<Pending[]>([]);
+  filesRef.current = files;
 
   useEffect(() => {
-    try { setReporter(localStorage.getItem("advc-reporter") || ""); } catch {}
+    try {
+      const saved = Number(localStorage.getItem(REPORTER_KEY));
+      if (saved) setReporterId(saved);
+    } catch {}
     fetch("/api/blob-upload").then((r) => r.json()).then((j) => setBlobOn(Boolean(j.enabled))).catch(() => {});
+    return () => filesRef.current.forEach((f) => URL.revokeObjectURL(f.preview));
   }, []);
-  useEffect(() => () => files.forEach((f) => URL.revokeObjectURL(f.preview)), []); // eslint-disable-line
 
-  function add(list: FileList | File[]) {
+  const add = useCallback((list: FileList | File[]) => {
     const next = [...list]
       .filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/"))
       .map((f) => ({ key: `${f.name}-${f.size}-${Math.random()}`, file: f, preview: URL.createObjectURL(f), progress: 0, state: "idle" as const }));
-    setFiles((p) => [...p, ...next]);
-  }
+    if (next.length) setFiles((p) => [...p, ...next]);
+    return next.length;
+  }, []);
+
+  // Ctrl+V / Cmd+V anywhere while the form is open attaches clipboard images.
+  // Plain text pastes still go into whichever field has focus.
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      if (busy) return;
+      const found = filesFromClipboard(e.clipboardData);
+      if (!found.length) return;
+      e.preventDefault();
+      const n = add(found);
+      if (n) setPasted((c) => c + n);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [add, busy]);
+
+  useEffect(() => {
+    if (!pasted) return;
+    const t = setTimeout(() => setPasted(0), 2200);
+    return () => clearTimeout(t);
+  }, [pasted]);
+
   function patch(key: string, v: Partial<Pending>) {
     setFiles((p) => p.map((f) => (f.key === key ? { ...f, ...v } : f)));
   }
@@ -352,9 +483,9 @@ function CreateForm({ members, onClose, onCreated }: {
       const fd = new FormData();
       fd.append("file", p.file);
       const r = await fetch(`/api/tasks/${taskId}/attachments`, { method: "POST", body: fd });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Errore ${r.status}`);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
     } else {
-      if (!blobOn) throw new Error("File oltre 4 MB: collega Vercel Blob per i video grandi");
+      if (!blobOn) throw new Error("File over 4 MB: connect a Vercel Blob store to upload large videos");
       const blob = await upload(`qa/${taskId}/${p.file.name}`, p.file, {
         access: "public",
         handleUploadUrl: "/api/blob-upload",
@@ -366,24 +497,34 @@ function CreateForm({ members, onClose, onCreated }: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ blobUrl: blob.url, filename: p.file.name }),
       });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Errore ${r.status}`);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
     }
     patch(p.key, { state: "done", progress: 100 });
   }
 
+  const reporter = members.find((m) => m.id === reporterId) || null;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) { setErr("Scrivi un titolo per la segnalazione."); return; }
+    if (!name.trim()) { setErr("Add a title for the report."); return; }
+    if (!reporter) { setErr("Pick who is reporting this."); return; }
     setBusy(true); setErr(null);
-    try { localStorage.setItem("advc-reporter", reporter); } catch {}
+    try { localStorage.setItem(REPORTER_KEY, String(reporter.id)); } catch {}
     try {
       const r = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description: desc, priority: priority || undefined, assignees, reporter: reporter || undefined }),
+        body: JSON.stringify({
+          name,
+          description: desc,
+          priority: priority || undefined,
+          assignees,
+          reporterId: reporter.id,
+          reporter: reporter.username,
+        }),
       });
       const j = await r.json();
-      if (!r.ok) throw new Error(j.error || "Creazione non riuscita");
+      if (!r.ok) throw new Error(j.error || "Couldn't create the subtask");
       const task: Task = j.task;
 
       let failed = 0;
@@ -392,12 +533,12 @@ function CreateForm({ members, onClose, onCreated }: {
         catch (e: any) { failed++; patch(p.key, { state: "fail", error: e.message }); }
       }
       if (failed) {
-        setErr(`Subtask creata su ClickUp, ma ${failed} allegati non sono stati caricati. Aggiungili da ClickUp.`);
+        setErr(`Subtask created on ClickUp, but ${failed} attachment(s) didn't upload. Add them from ClickUp.`);
         setBusy(false);
-        onCreated(task, "Subtask creata, alcuni allegati mancano");
+        onCreated(task, "Subtask created, some attachments missing");
         return;
       }
-      onCreated(task, files.length ? `Subtask creata con ${files.length} allegati` : "Subtask creata su ClickUp");
+      onCreated(task, files.length ? `Subtask created with ${files.length} attachment(s)` : "Subtask created on ClickUp");
     } catch (e: any) {
       setErr(e.message);
       setBusy(false);
@@ -407,28 +548,39 @@ function CreateForm({ members, onClose, onCreated }: {
   return (
     <>
       <div className="scrim" onClick={() => !busy && onClose()} />
-      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Nuova segnalazione">
-        <button className="btn close" onClick={onClose} disabled={busy}>Chiudi</button>
-        <h2>Nuova segnalazione</h2>
-        <p className="hint">Diventa una subtask di QA su ClickUp, con gli allegati.</p>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label="New report">
+        <button className="btn close" onClick={onClose} disabled={busy}>Close</button>
+        <h2>New report</h2>
+        <p className="hint">Creates a QA subtask on ClickUp, with its attachments.</p>
         <form onSubmit={submit}>
           <label className="field">
-            <span>Titolo</span>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Es. Il Frost Hammer non fa danno ai Goblin" autoFocus required />
+            <span>Title</span>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="E.g. The Frost Hammer deals no damage to Goblins" autoFocus required />
           </label>
           <label className="field">
-            <span>Descrizione</span>
+            <span>Description</span>
             <textarea className="textarea" value={desc} onChange={(e) => setDesc(e.target.value)}
-              onPaste={(e) => {
-                const pasted = [...e.clipboardData.files];
-                if (pasted.length) { e.preventDefault(); add(pasted); }
-              }}
-              placeholder={"Cosa succede, cosa ti aspettavi, come riprodurlo.\nSupporta Markdown."} />
+              placeholder={"What happens, what you expected, how to reproduce it.\nMarkdown supported."} />
           </label>
           <div className="field">
-            <span>Priorità</span>
+            <span>Reported by</span>
+            {members.length ? (
+              <div className="chips" role="radiogroup" aria-label="Reported by">
+                {members.map((m) => (
+                  <button type="button" key={m.id} className="chip" role="radio"
+                    aria-checked={reporterId === m.id} aria-pressed={reporterId === m.id}
+                    onClick={() => setReporterId(m.id)}>
+                    <Avatar p={m} />{m.username}
+                  </button>
+                ))}
+              </div>
+            ) : <p className="hint">Loading team members…</p>}
+            <div className="hint">Remembered on this device for your next reports.</div>
+          </div>
+          <div className="field">
+            <span>Priority</span>
             <div className="chips">
-              <button type="button" className="chip" style={{ paddingLeft: 10 }} aria-pressed={!priority} onClick={() => setPriority("")}>Nessuna</button>
+              <button type="button" className="chip" style={{ paddingLeft: 10 }} aria-pressed={!priority} onClick={() => setPriority("")}>None</button>
               {PRIORITIES.map((p) => (
                 <button type="button" key={p.v} className="chip" style={{ paddingLeft: 10 }} aria-pressed={priority === p.v} onClick={() => setPriority(p.v)}>
                   <span className="dot" style={{ background: p.color }} />{p.label}
@@ -438,7 +590,7 @@ function CreateForm({ members, onClose, onCreated }: {
           </div>
           {members.length > 0 && (
             <div className="field">
-              <span>Assegna a</span>
+              <span>Assign to</span>
               <div className="chips">
                 {members.map((m) => (
                   <button type="button" key={m.id} className="chip" aria-pressed={assignees.includes(m.id)}
@@ -449,14 +601,10 @@ function CreateForm({ members, onClose, onCreated }: {
               </div>
             </div>
           )}
-          <label className="field">
-            <span>Il tuo nome</span>
-            <input className="input" value={reporter} onChange={(e) => setReporter(e.target.value)} placeholder="Facoltativo, finisce in fondo alla descrizione" />
-          </label>
           <div className="field">
-            <span>Immagini e video</span>
+            <span>Images and videos</span>
             <div
-              className={`drop${over ? " over" : ""}`}
+              className={`drop${over ? " over" : ""}${pasted ? " over" : ""}`}
               role="button" tabIndex={0}
               onClick={() => input.current?.click()}
               onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && input.current?.click()}
@@ -464,13 +612,15 @@ function CreateForm({ members, onClose, onCreated }: {
               onDragLeave={() => setOver(false)}
               onDrop={(e) => { e.preventDefault(); setOver(false); add(e.dataTransfer.files); }}
             >
-              Trascina qui screenshot o clip, oppure clicca per sceglierli
+              {pasted
+                ? `Pasted ${pasted} image${pasted > 1 ? "s" : ""} from the clipboard`
+                : <>Paste screenshots with <kbd>Ctrl</kbd>+<kbd>V</kbd>, drop files here, or click to browse</>}
               <div className="hint">
-                {blobOn ? "Video fino a 1 GB." : "Fino a 4 MB per file; per video più grandi va collegato Vercel Blob."}
-                {" "}Puoi anche incollare uno screenshot con Ctrl+V nella descrizione.
+                Paste works anywhere in this form, as many times as you like.{" "}
+                {blobOn ? "Videos up to 1 GB." : "Up to 4 MB per file; large videos need a Vercel Blob store."}
               </div>
             </div>
-            <input ref={input} type="file" accept="image/*,video/*" multiple hidden onChange={(e) => e.target.files && add(e.target.files)} />
+            <input ref={input} type="file" accept="image/*,video/*" multiple hidden onChange={(e) => { if (e.target.files) add(e.target.files); e.target.value = ""; }} />
             {files.length > 0 && (
               <div className="files">
                 {files.map((f) => (
@@ -479,7 +629,10 @@ function CreateForm({ members, onClose, onCreated }: {
                     <div className="fn">{f.file.name} · {fmtSize(f.file.size)}</div>
                     <div className="bar" style={{ width: `${f.progress}%` }} />
                     {f.state === "idle" && !busy && (
-                      <button type="button" className="x" aria-label="Rimuovi" onClick={() => setFiles((p) => p.filter((x) => x.key !== f.key))}>×</button>
+                      <button type="button" className="x" aria-label={`Remove ${f.file.name}`} onClick={() => {
+                        URL.revokeObjectURL(f.preview);
+                        setFiles((p) => p.filter((x) => x.key !== f.key));
+                      }}>×</button>
                     )}
                   </div>
                 ))}
@@ -488,8 +641,8 @@ function CreateForm({ members, onClose, onCreated }: {
           </div>
           {err && <div className="err">{err}</div>}
           <div className="actions">
-            <button className="btn primary" type="submit" disabled={busy}>{busy ? "Creo su ClickUp…" : "Crea subtask"}</button>
-            <button className="btn" type="button" onClick={onClose} disabled={busy}>Annulla</button>
+            <button className="btn primary" type="submit" disabled={busy}>{busy ? "Creating on ClickUp…" : "Create subtask"}</button>
+            <button className="btn" type="button" onClick={onClose} disabled={busy}>Cancel</button>
           </div>
         </form>
       </aside>

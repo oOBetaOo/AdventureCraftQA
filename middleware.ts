@@ -16,7 +16,7 @@ export function middleware(req: NextRequest) {
       /* fall through */
     }
   }
-  return new NextResponse("Accesso riservato al team AdventureCraft", {
+  return new NextResponse("Restricted to the AdventureCraft team", {
     status: 401,
     headers: { "WWW-Authenticate": 'Basic realm="ADVC QA", charset="UTF-8"' },
   });

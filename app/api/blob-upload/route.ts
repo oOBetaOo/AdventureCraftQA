@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 // bypassing the ~4.5 MB request limit of serverless functions.
 export async function POST(req: Request) {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return Response.json({ error: "Blob store non collegato" }, { status: 501 });
+    return Response.json({ error: "Blob store not connected" }, { status: 501 });
   }
   const body = (await req.json()) as HandleUploadBody;
   try {

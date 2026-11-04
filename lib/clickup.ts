@@ -9,7 +9,7 @@ export const QA_LIST_ID = process.env.QA_LIST_ID || "901523125199";
 
 function token(): string {
   const t = process.env.CLICKUP_API_TOKEN;
-  if (!t) throw new Error("CLICKUP_API_TOKEN non configurato su Vercel");
+  if (!t) throw new Error("CLICKUP_API_TOKEN is not set on Vercel");
   return t;
 }
 

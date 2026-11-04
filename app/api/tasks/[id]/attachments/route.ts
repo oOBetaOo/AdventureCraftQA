@@ -6,7 +6,7 @@ export const maxDuration = 60;
 
 async function assertQASubtask(id: string) {
   const t = await cu<any>(`/task/${encodeURIComponent(id)}`);
-  if (t.parent !== QA_PARENT_ID) throw new Error("Questa task non è una subtask di QA");
+  if (t.parent !== QA_PARENT_ID) throw new Error("This task is not a QA subtask");
 }
 
 async function sendToClickUp(id: string, file: Blob, filename: string) {
@@ -35,10 +35,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       const { blobUrl, filename } = await req.json();
       const host = new URL(String(blobUrl)).hostname;
       if (!host.endsWith(".public.blob.vercel-storage.com")) {
-        return jsonError(new Error("URL blob non valido"), 400);
+        return jsonError(new Error("Invalid blob URL"), 400);
       }
       const r = await fetch(blobUrl);
-      if (!r.ok) throw new Error(`Download blob fallito (${r.status})`);
+      if (!r.ok) throw new Error(`Blob download failed (${r.status})`);
       const blob = await r.blob();
       const out = await sendToClickUp(id, blob, String(filename || "file"));
       // The file now lives on ClickUp: remove the temporary copy.
@@ -48,7 +48,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     const form = await req.formData();
     const file = form.get("file");
-    if (!(file instanceof File)) return jsonError(new Error("Nessun file ricevuto"), 400);
+    if (!(file instanceof File)) return jsonError(new Error("No file received"), 400);
     const out = await sendToClickUp(id, file, file.name);
     return Response.json({ attachment: out });
   } catch (e) {

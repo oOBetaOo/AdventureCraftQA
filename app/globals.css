@@ -188,3 +188,8 @@ a { color: var(--accent); }
   .row .avatars { display: none; }
   .brand small { display: none; }
 }
+kbd {
+  font: 600 12px/1 "Instrument Sans", system-ui, sans-serif;
+  padding: 2px 6px; border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; background: var(--surface);
+}

@@ -37,7 +37,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const name = String(body.name || "").trim();
-    if (!name) return jsonError(new Error("Il titolo è obbligatorio"), 400);
+    if (!name) return jsonError(new Error("A title is required"), 400);
 
     const payload: Record<string, unknown> = {
       name,
@@ -51,7 +51,7 @@ export async function POST(req: Request) {
     if (body.status) payload.status = String(body.status);
     if (body.reporter) {
       payload.markdown_content =
-        `${payload.markdown_content}\n\n---\n_Segnalato da ${String(body.reporter)} tramite ADVC QA board_`.trim();
+        `${payload.markdown_content}\n\n---\n_Reported by ${String(body.reporter)} via the ADVC QA board_`.trim();
     }
 
     const created = await cu<any>(`/list/${QA_LIST_ID}/task`, {
