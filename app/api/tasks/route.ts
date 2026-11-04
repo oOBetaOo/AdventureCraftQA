@@ -51,7 +51,7 @@ export async function POST(req: Request) {
     if (body.status) payload.status = String(body.status);
     if (body.reporter) {
       payload.markdown_content =
-        `${payload.markdown_content}\n\n---\n_Reported by ${String(body.reporter)} via the ADVC QA board_`.trim();
+        `${payload.markdown_content}\n\n_Reported by ${String(body.reporter)} via the ADVC QA board_`.trim();
     }
 
     const created = await cu<any>(`/list/${QA_LIST_ID}/task`, {

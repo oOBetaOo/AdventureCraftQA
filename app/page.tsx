@@ -64,6 +64,20 @@ function fromDateInput(v: string) {
   const [y, m, d] = v.split("-").map(Number);
   return new Date(y, m - 1, d, 12).getTime(); // noon local, so time zones don't shift the day
 }
+// The board appends "_Reported by X via the ADVC QA board_" to descriptions (older reports
+// also had a "---" rule, which ClickUp returns as "* * *"). Keep it out of the editable text.
+const FOOTER_RE = /\s*(?:(?:^|\n)\s*(?:\* \* \*|-{3,}|\*{3,})\s*)?\n*\s*_?Reported by (.+?) via the ADVC QA board_?\s*$/;
+function splitDescription(desc: string) {
+  const m = FOOTER_RE.exec(desc || "");
+  if (!m) return { body: desc || "", reporter: null as string | null };
+  return { body: desc.slice(0, m.index).replace(/\s+$/, ""), reporter: m[1].trim() };
+}
+function joinDescription(body: string, reporter: string | null) {
+  const b = body.replace(/\s+$/, "");
+  if (!reporter) return b;
+  return `${b}${b ? "\n\n" : ""}_Reported by ${reporter} via the ADVC QA board_`;
+}
+
 function prioValue(p: string | null) {
   return PRIORITIES.find((x) => x.key === (p || "").toLowerCase())?.v || "";
 }
@@ -633,10 +647,13 @@ function Detail({ id, people, statuses, onClose, onUpdated, onDeleted }: {
   const [priority, setPriority] = useState("");
   const [due, setDue] = useState("");
   const [assignees, setAssignees] = useState<number[]>([]);
+  const [reporter, setReporter] = useState<string | null>(null);
 
   function fill(d: { task: Task; description: string }) {
+    const parts = splitDescription(d.description || "");
     setName(d.task.name);
-    setDesc(d.description || "");
+    setDesc(parts.body);
+    setReporter(parts.reporter);
     setStatus(d.task.status);
     setPriority(prioValue(d.task.priority));
     setDue(toDateInput(d.task.dueDate));
@@ -656,7 +673,7 @@ function Detail({ id, people, statuses, onClose, onUpdated, onDeleted }: {
     const t = data.task;
     const out: Record<string, unknown> = {};
     if (name.trim() !== t.name) out.name = name;
-    if (desc !== (data.description || "")) out.description = desc;
+    if (desc !== splitDescription(data.description || "").body) out.description = joinDescription(desc, reporter);
     if (status.toLowerCase() !== t.status.toLowerCase()) out.status = status;
     if (priority !== prioValue(t.priority)) out.priority = priority || null;
     if (due !== toDateInput(t.dueDate)) out.dueDate = fromDateInput(due);
@@ -748,6 +765,10 @@ function Detail({ id, people, statuses, onClose, onUpdated, onDeleted }: {
               <span>Title</span>
               <input className="input title-input" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} required />
             </label>
+            <p className="hint meta-line">
+              {reporter ? `Reported by ${reporter}` : data.task.creator ? `Created by ${data.task.creator}` : "Created on ClickUp"}
+              {data.task.dateCreated ? `, ${ago(data.task.dateCreated)}` : ""}
+            </p>
 
             <div className="grid2">
               <label className="field">
