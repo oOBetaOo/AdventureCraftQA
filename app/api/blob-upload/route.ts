@@ -14,7 +14,7 @@ export async function POST(req: Request) {
       body,
       request: req,
       onBeforeGenerateToken: async () => ({
-        allowedContentTypes: ["image/*", "video/*"],
+        // Any file type: screenshots, videos, logs, .zip packs, .mcaddon builds…
         maximumSizeInBytes: 1024 * 1024 * 1024, // ClickUp accepts up to 1 GB
         addRandomSuffix: true,
       }),

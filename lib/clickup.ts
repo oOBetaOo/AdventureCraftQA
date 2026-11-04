@@ -42,6 +42,7 @@ export type QATask = {
   url: string;
   dateCreated: number;
   dateUpdated: number;
+  dueDate: number | null;
 };
 
 export function mapTask(t: any): QATask {
@@ -65,6 +66,7 @@ export function mapTask(t: any): QATask {
     url: t.url,
     dateCreated: Number(t.date_created) || 0,
     dateUpdated: Number(t.date_updated) || 0,
+    dueDate: t.due_date ? Number(t.due_date) : null,
   };
 }
 

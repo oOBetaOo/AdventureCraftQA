@@ -193,3 +193,69 @@ kbd {
   padding: 2px 6px; border: 1px solid var(--line); border-bottom-width: 2px;
   border-radius: 4px; background: var(--surface);
 }
+
+/* ---------- people dropdown ---------- */
+.pp { position: relative; flex: 1; min-width: 0; }
+.pp-trigger {
+  width: 100%; min-height: 40px; display: flex; align-items: center; gap: 8px; text-align: left;
+  padding: 5px 34px 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); cursor: pointer;
+  position: relative;
+}
+.pp-trigger:hover:not(:disabled) { border-color: var(--muted); }
+.pp-trigger[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pp-ph { color: var(--muted); padding-left: 4px; }
+.pp-caret { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 12px; }
+.pp-sel { display: flex; flex-wrap: wrap; gap: 4px; }
+.pp-tag {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px 2px 2px;
+  border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: 13px;
+}
+.pp-tag .av { width: 20px; height: 20px; margin: 0; border: 0; font-size: 9px; }
+.pp-rm { padding: 0 5px; border-radius: 999px; color: var(--muted); line-height: 1.2; }
+.pp-rm:hover { background: var(--row-hover); color: var(--ink); }
+.pp-pop {
+  position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; right: 0; min-width: 240px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.pp-search { width: 100%; border: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; background: transparent; outline: none; }
+.pp-list { list-style: none; margin: 0; padding: 4px; max-height: 260px; overflow: auto; }
+.pp-opt { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.pp-opt.hi { background: var(--row-hover); }
+.pp-opt .av { margin: 0; border: 0; width: 24px; height: 24px; }
+.pp-check {
+  width: 16px; height: 16px; border: 1.5px solid var(--muted); border-radius: 4px; flex: none;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700;
+}
+.pp-check.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.pp-none { padding: 10px; color: var(--muted); font-size: 13px; }
+.pp-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 8px; border-top: 1px solid var(--line); }
+.pp-foot .btn { padding: 5px 12px; }
+.assign-row { display: flex; gap: 8px; align-items: flex-start; }
+.btn.small { padding: 8px 10px; white-space: nowrap; font-size: 13px; }
+
+/* ---------- edit panel ---------- */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+@media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
+.title-input { font-size: 18px; font-weight: 600; }
+.select-wrap { position: relative; display: block; }
+.select-wrap .dot { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.select-wrap select { padding-left: 28px; text-transform: capitalize; }
+.input:disabled, .textarea:disabled { opacity: 0.65; }
+.sticky-actions {
+  position: sticky; bottom: -40px; background: var(--surface);
+  padding: 12px 0; margin-bottom: 0; border-top: 1px solid var(--line);
+}
+.danger-zone { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.btn.danger-ghost { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); background: transparent; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.confirm span { flex-basis: 100%; font-weight: 600; font-size: 14px; }
+
+/* ---------- generic file tiles ---------- */
+.ficon {
+  height: 80px; display: grid; place-items: center; background: var(--row-hover);
+  font: 700 15px/1 "Silkscreen", monospace; color: var(--muted); letter-spacing: .5px;
+}
+.att .ficon { height: 96px; }
+.ferr { font-size: 11px; color: var(--danger); padding: 0 6px 4px; line-height: 1.3; }

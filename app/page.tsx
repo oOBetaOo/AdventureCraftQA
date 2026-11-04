@@ -8,20 +8,23 @@ type Task = {
   id: string; name: string; status: string; statusColor: string;
   priority: string | null; priorityColor: string | null;
   assignees: Person[]; creator: string | null; tags: string[]; url: string;
-  dateCreated: number; dateUpdated: number;
+  dateCreated: number; dateUpdated: number; dueDate: number | null;
 };
 type Status = { status: string; color: string; orderindex: number };
-type Pending = { key: string; file: File; preview: string; progress: number; state: "idle" | "up" | "done" | "fail"; error?: string };
+type Pending = { key: string; file: File; preview: string | null; progress: number; state: "idle" | "up" | "done" | "fail"; error?: string };
+type Attachment = { id: string; title: string; url: string; thumbnail: string | null; extension?: string; mimetype?: string; size?: number };
 
 const DONE = ["completed", "closed", "complete", "done"];
 const PRIORITIES = [
-  { v: "1", label: "Urgent", color: "#f50000" },
-  { v: "2", label: "High", color: "#f8ae00" },
-  { v: "3", label: "Normal", color: "#6fddff" },
-  { v: "4", label: "Low", color: "#d8d8d8" },
+  { v: "1", label: "Urgent", key: "urgent", color: "#f50000" },
+  { v: "2", label: "High", key: "high", color: "#f8ae00" },
+  { v: "3", label: "Normal", key: "normal", color: "#6fddff" },
+  { v: "4", label: "Low", key: "low", color: "#d8d8d8" },
 ];
 const SMALL_LIMIT = 4 * 1024 * 1024; // above this, go through Vercel Blob
 const REPORTER_KEY = "advc-reporter-id";
+
+/* ---------------- small helpers ---------------- */
 
 function initials(p: Person) {
   if (p.initials) return p.initials;
@@ -45,8 +48,325 @@ function ago(ms: number) {
   return `${Math.round(d / 86400)} d ago`;
 }
 function fmtSize(b: number) {
-  return b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`;
+  return b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 }
+function ext(name: string) {
+  const m = /\.([a-z0-9]+)$/i.exec(name);
+  return m ? m[1].toUpperCase() : "FILE";
+}
+function toDateInput(ms: number | null) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function fromDateInput(v: string) {
+  if (!v) return null;
+  const [y, m, d] = v.split("-").map(Number);
+  return new Date(y, m - 1, d, 12).getTime(); // noon local, so time zones don't shift the day
+}
+function prioValue(p: string | null) {
+  return PRIORITIES.find((x) => x.key === (p || "").toLowerCase())?.v || "";
+}
+
+// Pulls files out of a paste event (screenshots or files copied to the clipboard).
+function filesFromClipboard(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const out: File[] = [];
+  for (const item of Array.from(data.items || [])) {
+    if (item.kind !== "file") continue;
+    const f = item.getAsFile();
+    if (f) out.push(f);
+  }
+  if (!out.length) out.push(...Array.from(data.files || []));
+  // Clipboard screenshots all arrive as "image.png": give each a unique, readable name.
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  return out.map((f, i) => {
+    if (f.name && f.name !== "image.png" && f.name !== "image") return f;
+    const e = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    return new File([f], `screenshot-${stamp}${out.length > 1 ? `-${i + 1}` : ""}.${e}`, { type: f.type });
+  });
+}
+
+/* ---------------- attachments queue (shared by create + edit) ---------------- */
+
+function useAttachQueue(blobOn: boolean) {
+  const [files, setFiles] = useState<Pending[]>([]);
+  const ref = useRef<Pending[]>([]);
+  ref.current = files;
+  useEffect(() => () => ref.current.forEach((f) => f.preview && URL.revokeObjectURL(f.preview)), []);
+
+  const add = useCallback((list: FileList | File[]) => {
+    const next = [...list].map((f) => ({
+      key: `${f.name}-${f.size}-${Math.random()}`,
+      file: f,
+      preview: f.type.startsWith("image/") || f.type.startsWith("video/") ? URL.createObjectURL(f) : null,
+      progress: 0,
+      state: "idle" as const,
+    }));
+    if (next.length) setFiles((p) => [...p, ...next]);
+    return next.length;
+  }, []);
+  const remove = useCallback((key: string) => {
+    setFiles((p) => {
+      const f = p.find((x) => x.key === key);
+      if (f?.preview) URL.revokeObjectURL(f.preview);
+      return p.filter((x) => x.key !== key);
+    });
+  }, []);
+  const clearDone = useCallback(() => setFiles((p) => p.filter((x) => x.state !== "done")), []);
+  const patch = (key: string, v: Partial<Pending>) => setFiles((p) => p.map((f) => (f.key === key ? { ...f, ...v } : f)));
+
+  async function uploadOne(taskId: string, p: Pending) {
+    patch(p.key, { state: "up", progress: 5, error: undefined });
+    if (p.file.size <= SMALL_LIMIT) {
+      const fd = new FormData();
+      fd.append("file", p.file);
+      const r = await fetch(`/api/tasks/${taskId}/attachments`, { method: "POST", body: fd });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
+    } else {
+      if (!blobOn) throw new Error("File over 4 MB: connect a Vercel Blob store to upload large files");
+      const blob = await upload(`qa/${taskId}/${p.file.name}`, p.file, {
+        access: "public",
+        handleUploadUrl: "/api/blob-upload",
+        contentType: p.file.type || "application/octet-stream",
+        onUploadProgress: (e) => patch(p.key, { progress: Math.max(5, Math.round(e.percentage * 0.85)) }),
+      });
+      patch(p.key, { progress: 90 });
+      const r = await fetch(`/api/tasks/${taskId}/attachments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ blobUrl: blob.url, filename: p.file.name }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
+    }
+    patch(p.key, { state: "done", progress: 100 });
+  }
+
+  // Uploads every file not yet uploaded; returns how many failed.
+  async function uploadAll(taskId: string) {
+    let failed = 0;
+    for (const p of ref.current.filter((x) => x.state !== "done")) {
+      try { await uploadOne(taskId, p); }
+      catch (e: any) { failed++; patch(p.key, { state: "fail", error: e.message }); }
+    }
+    return failed;
+  }
+
+  return { files, add, remove, uploadAll, clearDone };
+}
+
+function useBlobEnabled() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    fetch("/api/blob-upload").then((r) => r.json()).then((j) => setOn(Boolean(j.enabled))).catch(() => {});
+  }, []);
+  return on;
+}
+
+// Ctrl+V / Cmd+V anywhere while a panel is open attaches clipboard files.
+// Plain text pastes still go into whichever field has focus.
+function usePasteFiles(enabled: boolean, add: (f: File[]) => number) {
+  const [pasted, setPasted] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    function onPaste(e: ClipboardEvent) {
+      const found = filesFromClipboard(e.clipboardData);
+      if (!found.length) return;
+      e.preventDefault();
+      const n = add(found);
+      if (n) setPasted((c) => c + n);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [enabled, add]);
+  useEffect(() => {
+    if (!pasted) return;
+    const t = setTimeout(() => setPasted(0), 2200);
+    return () => clearTimeout(t);
+  }, [pasted]);
+  return pasted;
+}
+
+function FileDrop({ queue, blobOn, busy, pasted }: {
+  queue: ReturnType<typeof useAttachQueue>;
+  blobOn: boolean;
+  busy: boolean;
+  pasted: number;
+}) {
+  const [over, setOver] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <div
+        className={`drop${over || pasted ? " over" : ""}`}
+        role="button" tabIndex={0}
+        onClick={() => input.current?.click()}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && input.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => { e.preventDefault(); setOver(false); queue.add(e.dataTransfer.files); }}
+      >
+        {pasted
+          ? `Pasted ${pasted} file${pasted > 1 ? "s" : ""} from the clipboard`
+          : <>Paste with <kbd>Ctrl</kbd>+<kbd>V</kbd>, drop files here, or click to browse</>}
+        <div className="hint">
+          Images, videos, logs, .zip, .mcaddon… any file type.{" "}
+          {blobOn ? "Up to 1 GB each." : "Up to 4 MB each until a Vercel Blob store is connected."}
+        </div>
+      </div>
+      <input ref={input} type="file" multiple hidden onChange={(e) => { if (e.target.files) queue.add(e.target.files); e.target.value = ""; }} />
+      {queue.files.length > 0 && (
+        <div className="files">
+          {queue.files.map((f) => (
+            <div key={f.key} className={`file${f.state === "done" ? " done" : ""}${f.state === "fail" ? " fail" : ""}`} title={f.error || f.file.name}>
+              {f.preview && f.file.type.startsWith("video/") ? <video src={f.preview} muted />
+                : f.preview ? <img src={f.preview} alt="" />
+                : <div className="ficon">{ext(f.file.name)}</div>}
+              <div className="fn">{f.file.name} · {fmtSize(f.file.size)}</div>
+              {f.error && <div className="ferr">{f.error}</div>}
+              <div className="bar" style={{ width: `${f.progress}%` }} />
+              {f.state !== "up" && f.state !== "done" && !busy && (
+                <button type="button" className="x" aria-label={`Remove ${f.file.name}`} onClick={() => queue.remove(f.key)}>×</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ---------------- people dropdown with search ---------------- */
+
+function PeoplePicker({ people, value, onChange, multiple = true, placeholder, disabled, label }: {
+  people: Person[];
+  value: number[];
+  onChange: (ids: number[]) => void;
+  multiple?: boolean;
+  placeholder: string;
+  disabled?: boolean;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+
+  const selected = value.map((id) => people.find((p) => p.id === id)).filter(Boolean) as Person[];
+  const list = useMemo(() => {
+    const n = q.trim().toLowerCase();
+    return n ? people.filter((p) => p.username.toLowerCase().includes(n)) : people;
+  }, [people, q]);
+
+  useEffect(() => {
+    if (!open) return;
+    setHi(0);
+    setTimeout(() => search.current?.focus(), 0);
+    const close = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  useEffect(() => setHi(0), [q]);
+
+  function toggle(id: number) {
+    if (!multiple) { onChange([id]); setOpen(false); setQ(""); return; }
+    onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  }
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(list.length - 1, h + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(0, h - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (list[hi]) toggle(list[hi].id); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+  }
+
+  return (
+    <div className="pp" ref={box}>
+      <button type="button" className="pp-trigger" onClick={() => setOpen((o) => !o)} disabled={disabled}
+        aria-haspopup="listbox" aria-expanded={open} aria-label={label}>
+        {selected.length ? (
+          <span className="pp-sel">
+            {selected.map((p) => (
+              <span key={p.id} className="pp-tag">
+                <Avatar p={p} />{p.username}
+                {multiple && !disabled && (
+                  <span className="pp-rm" role="button" aria-label={`Remove ${p.username}`}
+                    onClick={(e) => { e.stopPropagation(); toggle(p.id); }}>×</span>
+                )}
+              </span>
+            ))}
+          </span>
+        ) : <span className="pp-ph">{placeholder}</span>}
+        <span className="pp-caret" aria-hidden>▾</span>
+      </button>
+      {open && (
+        <div className="pp-pop">
+          <input ref={search} className="pp-search" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey}
+            placeholder="Type a name" aria-label={`Search ${label.toLowerCase()}`} />
+          <ul className="pp-list" role="listbox" aria-multiselectable={multiple}>
+            {list.map((p, i) => {
+              const on = value.includes(p.id);
+              return (
+                <li key={p.id} role="option" aria-selected={on} className={`pp-opt${i === hi ? " hi" : ""}`}
+                  onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); toggle(p.id); }}>
+                  {multiple && <span className={`pp-check${on ? " on" : ""}`} aria-hidden>{on ? "✓" : ""}</span>}
+                  <Avatar p={p} />{p.username}
+                </li>
+              );
+            })}
+            {!list.length && <li className="pp-none">Nobody matches “{q}”</li>}
+          </ul>
+          {multiple && (
+            <div className="pp-foot">
+              <button type="button" className="btn" onClick={() => onChange([])}>Clear</button>
+              <button type="button" className="btn primary" onClick={() => { setOpen(false); setQ(""); }}>Done</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AssigneeField({ people, value, onChange, me, disabled }: {
+  people: Person[]; value: number[]; onChange: (ids: number[]) => void; me: Person | null; disabled?: boolean;
+}) {
+  return (
+    <div className="assign-row">
+      <PeoplePicker people={people} value={value} onChange={onChange} placeholder="Nobody assigned" label="Assignees" disabled={disabled} />
+      {me && !value.includes(me.id) && (
+        <button type="button" className="btn small" onClick={() => onChange([...value, me.id])} disabled={disabled}>Assign me</button>
+      )}
+    </div>
+  );
+}
+
+function PriorityChips({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
+  return (
+    <div className="chips">
+      <button type="button" className="chip" style={{ paddingLeft: 10 }} aria-pressed={!value} onClick={() => onChange("")} disabled={disabled}>None</button>
+      {PRIORITIES.map((p) => (
+        <button type="button" key={p.v} className="chip" style={{ paddingLeft: 10 }} aria-pressed={value === p.v} onClick={() => onChange(p.v)} disabled={disabled}>
+          <span className="dot" style={{ background: p.color }} />{p.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function useMe(people: Person[]) {
+  const [meId, setMeId] = useState<number | null>(null);
+  useEffect(() => {
+    try { const v = Number(localStorage.getItem(REPORTER_KEY)); if (v) setMeId(v); } catch {}
+  }, []);
+  const set = (id: number | null) => {
+    setMeId(id);
+    try { id ? localStorage.setItem(REPORTER_KEY, String(id)) : localStorage.removeItem(REPORTER_KEY); } catch {}
+  };
+  return { me: people.find((p) => p.id === meId) || null, meId, setMeId: set };
+}
+
+/* ---------------- page ---------------- */
 
 export default function Page() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -93,6 +413,17 @@ export default function Page() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // People ordered by how often they're assigned on QA, so the regulars are at the top of every dropdown.
+  const ranked = useMemo(() => {
+    const count = new Map<number, number>();
+    tasks.forEach((t) => t.assignees.forEach((a) => count.set(a.id, (count.get(a.id) || 0) + 1)));
+    const all = new Map<number, Person>();
+    members.forEach((m) => all.set(m.id, m));
+    tasks.forEach((t) => t.assignees.forEach((a) => { if (!all.has(a.id)) all.set(a.id, a); }));
+    return [...all.values()].sort((a, b) =>
+      (count.get(b.id) || 0) - (count.get(a.id) || 0) || a.username.localeCompare(b.username));
+  }, [members, tasks]);
+
   const statusList = useMemo(() => {
     const map = new Map<string, { status: string; color: string; order: number; n: number }>();
     statuses.forEach((s) => map.set(s.status.toLowerCase(), { status: s.status, color: s.color, order: s.orderindex, n: 0 }));
@@ -101,7 +432,7 @@ export default function Page() {
       if (!map.has(k)) map.set(k, { status: t.status, color: t.statusColor, order: 99, n: 0 });
       map.get(k)!.n++;
     });
-    return [...map.values()].filter((s) => s.n > 0).sort((a, b) => a.order - b.order);
+    return [...map.values()].sort((a, b) => a.order - b.order);
   }, [tasks, statuses]);
 
   const people = useMemo(() => {
@@ -176,7 +507,7 @@ export default function Page() {
           <button className="fbtn" aria-pressed={statusF === "all"} onClick={() => setStatusF("all")}>
             All <span className="n">{tasks.length}</span>
           </button>
-          {statusList.map((s) => (
+          {statusList.filter((s) => s.n > 0).map((s) => (
             <button key={s.status} className="fbtn" aria-pressed={statusF === s.status.toLowerCase()} onClick={() => setStatusF(s.status.toLowerCase())}>
               <span className="dot" style={{ background: s.color }} />
               <span style={{ textTransform: "capitalize" }}>{s.status}</span>
@@ -242,17 +573,23 @@ export default function Page() {
       {openId && (
         <Detail
           id={openId}
-          members={members}
+          people={ranked}
+          statuses={statusList}
           onClose={() => setOpenId(null)}
           onUpdated={(t) => {
             setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, ...t } : x)));
-            setToast("Assignees updated on ClickUp");
+            setToast("Changes saved to ClickUp");
+          }}
+          onDeleted={(id) => {
+            setTasks((prev) => prev.filter((x) => x.id !== id));
+            setOpenId(null);
+            setToast("Subtask deleted from ClickUp");
           }}
         />
       )}
       {creating && (
         <CreateForm
-          members={members}
+          people={ranked}
           onClose={() => setCreating(false)}
           onCreated={(t, msg) => {
             setTasks((prev) => [t, ...prev.filter((x) => x.id !== t.id)]);
@@ -269,38 +606,110 @@ export default function Page() {
   );
 }
 
-function Detail({ id, members, onClose, onUpdated }: {
+/* ---------------- detail / edit panel ---------------- */
+
+function Detail({ id, people, statuses, onClose, onUpdated, onDeleted }: {
   id: string;
-  members: Person[];
+  people: Person[];
+  statuses: { status: string; color: string }[];
   onClose: () => void;
   onUpdated: (t: Task) => void;
+  onDeleted: (id: string) => void;
 }) {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<{ task: Task; description: string; attachments: Attachment[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [picked, setPicked] = useState<number[] | null>(null); // null = not editing
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const blobOn = useBlobEnabled();
+  const queue = useAttachQueue(blobOn);
+  const pasted = usePasteFiles(Boolean(data) && !saving, queue.add);
+  const { me } = useMe(people);
+
+  // editable copy
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [status, setStatus] = useState("");
+  const [priority, setPriority] = useState("");
+  const [due, setDue] = useState("");
+  const [assignees, setAssignees] = useState<number[]>([]);
+
+  function fill(d: { task: Task; description: string }) {
+    setName(d.task.name);
+    setDesc(d.description || "");
+    setStatus(d.task.status);
+    setPriority(prioValue(d.task.priority));
+    setDue(toDateInput(d.task.dueDate));
+    setAssignees(d.task.assignees.map((a) => a.id));
+  }
+
   useEffect(() => {
     fetch(`/api/tasks/${id}`).then(async (r) => {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
-      setData(j);
+      setData(j); fill(j);
     }).catch((e) => setErr(e.message));
   }, [id]);
 
-  async function saveAssignees() {
-    if (!picked) return;
+  const dirtyFields = useMemo(() => {
+    if (!data) return {} as Record<string, unknown>;
+    const t = data.task;
+    const out: Record<string, unknown> = {};
+    if (name.trim() !== t.name) out.name = name;
+    if (desc !== (data.description || "")) out.description = desc;
+    if (status.toLowerCase() !== t.status.toLowerCase()) out.status = status;
+    if (priority !== prioValue(t.priority)) out.priority = priority || null;
+    if (due !== toDateInput(t.dueDate)) out.dueDate = fromDateInput(due);
+    const had = t.assignees.map((a) => a.id).sort().join(",");
+    if ([...assignees].sort().join(",") !== had) out.assignees = assignees;
+    return out;
+  }, [data, name, desc, status, priority, due, assignees]);
+  const pendingFiles = queue.files.filter((f) => f.state !== "done").length;
+  const dirty = Object.keys(dirtyFields).length > 0 || pendingFiles > 0;
+
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !saving && !deleting) {
+        if (dirty && !confirm("Discard your unsaved changes?")) return;
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose, dirty, saving, deleting]);
+
+  function tryClose() {
+    if (saving || deleting) return;
+    if (dirty && !confirm("Discard your unsaved changes?")) return;
+    onClose();
+  }
+
+  async function save(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!data || !dirty) return;
+    if (!name.trim()) { setErr("The title can't be empty."); return; }
     setSaving(true); setErr(null);
     try {
-      const r = await fetch(`/api/tasks/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignees: picked }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || "Couldn't update the assignees");
-      setData((d: any) => ({ ...d, task: j.task }));
-      onUpdated(j.task);
-      setPicked(null);
+      let next = data;
+      if (Object.keys(dirtyFields).length) {
+        const r = await fetch(`/api/tasks/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(dirtyFields),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || "Couldn't save the changes");
+        next = j;
+      }
+      if (pendingFiles) {
+        const failed = await queue.uploadAll(id);
+        const r = await fetch(`/api/tasks/${id}`);
+        if (r.ok) next = await r.json();
+        if (failed) setErr(`${failed} file(s) didn't upload. Hover them to see why, then save again to retry.`);
+        else queue.clearDone();
+      }
+      setData(next); fill(next);
+      onUpdated(next.task);
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -308,115 +717,121 @@ function Detail({ id, members, onClose, onUpdated }: {
     }
   }
 
-  // Members of the list, plus anyone already assigned who isn't listed (e.g. a guest).
-  const pool: Person[] = useMemo(() => {
-    const m = new Map<number, Person>();
-    members.forEach((p) => m.set(p.id, p));
-    (data?.task.assignees || []).forEach((p: Person) => { if (!m.has(p.id)) m.set(p.id, p); });
-    return [...m.values()];
-  }, [members, data]);
-  useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, [onClose]);
+  async function remove() {
+    setDeleting(true); setErr(null);
+    try {
+      const r = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "Couldn't delete the subtask");
+      onDeleted(id);
+    } catch (e: any) {
+      setErr(e.message);
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  }
+
+  const busy = saving || deleting;
+  const statusColor = statuses.find((s) => s.status.toLowerCase() === status.toLowerCase())?.color || data?.task.statusColor;
 
   return (
     <>
-      <div className="scrim" onClick={onClose} />
-      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Subtask details">
-        <button className="btn close" onClick={onClose}>Close</button>
-        {err && <div className="err">{err}</div>}
+      <div className="scrim" onClick={tryClose} />
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Edit subtask">
+        <button className="btn close" onClick={tryClose} disabled={busy}>Close</button>
         {!data && !err && <p className="empty">Loading…</p>}
+        {!data && err && <div className="err">{err}</div>}
         {data && (
-          <>
-            <h2>{data.task.name}</h2>
-            <p className="row-meta" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <span><span className="dot" style={{ background: data.task.statusColor, display: "inline-block", marginRight: 6 }} />{data.task.status}</span>
-              {data.task.priority && <span className="prio" style={{ color: data.task.priorityColor }}>{data.task.priority}</span>}
-            </p>
+          <form onSubmit={save}>
+            <label className="field" style={{ marginTop: 0 }}>
+              <span>Title</span>
+              <input className="input title-input" value={name} onChange={(e) => setName(e.target.value)} disabled={busy} required />
+            </label>
+
+            <div className="grid2">
+              <label className="field">
+                <span>Status</span>
+                <span className="select-wrap">
+                  <span className="dot" style={{ background: statusColor }} />
+                  <select className="input" value={status} onChange={(e) => setStatus(e.target.value)} disabled={busy}>
+                    {statuses.map((s) => <option key={s.status} value={s.status}>{s.status}</option>)}
+                    {!statuses.some((s) => s.status.toLowerCase() === status.toLowerCase()) && <option value={status}>{status}</option>}
+                  </select>
+                </span>
+              </label>
+              <label className="field">
+                <span>Due date</span>
+                <input className="input" type="date" value={due} onChange={(e) => setDue(e.target.value)} disabled={busy} />
+              </label>
+            </div>
+
+            <div className="field">
+              <span>Priority</span>
+              <PriorityChips value={priority} onChange={setPriority} disabled={busy} />
+            </div>
+
             <div className="field">
               <span>Assignees</span>
-              {picked === null ? (
-                <div className="chips">
-                  {data.task.assignees.length
-                    ? data.task.assignees.map((a: Person) => (
-                        <span key={a.id} className="chip" style={{ cursor: "default" }}><Avatar p={a} />{a.username}</span>
-                      ))
-                    : <span className="hint" style={{ margin: 0 }}>Nobody assigned yet.</span>}
-                  <button type="button" className="btn" style={{ padding: "4px 12px" }}
-                    onClick={() => setPicked(data.task.assignees.map((a: Person) => a.id))}>
-                    Edit assignees
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="chips">
-                    {pool.map((m) => (
-                      <button type="button" key={m.id} className="chip" aria-pressed={picked.includes(m.id)} disabled={saving}
-                        onClick={() => setPicked((p) => (p!.includes(m.id) ? p!.filter((x) => x !== m.id) : [...p!, m.id]))}>
-                        <Avatar p={m} />{m.username}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="actions" style={{ marginTop: 10 }}>
-                    <button type="button" className="btn primary" onClick={saveAssignees} disabled={saving}>
-                      {saving ? "Saving…" : "Save assignees"}
-                    </button>
-                    <button type="button" className="btn" onClick={() => setPicked(null)} disabled={saving}>Cancel</button>
-                  </div>
-                </>
-              )}
+              <AssigneeField people={people} value={assignees} onChange={setAssignees} me={me} disabled={busy} />
             </div>
-            {data.description ? <div className="desc">{data.description}</div> : <p className="hint">No description.</p>}
-            {data.attachments.length > 0 && (
-              <>
-                <h3 style={{ fontSize: 14, marginTop: 18, marginBottom: 0 }}>Attachments</h3>
+
+            <label className="field">
+              <span>Description</span>
+              <textarea className="textarea" value={desc} onChange={(e) => setDesc(e.target.value)} disabled={busy}
+                placeholder={"What happens, what you expected, how to reproduce it.\nMarkdown supported."} />
+            </label>
+
+            <div className="field">
+              <span>Attachments</span>
+              {data.attachments.length > 0 ? (
                 <div className="att">
-                  {data.attachments.map((a: any) => (
-                    <a key={a.id} href={a.url} target="_blank" rel="noreferrer">
-                      {a.thumbnail || a.mimetype?.startsWith("image") ? <img src={a.thumbnail || a.url} alt="" /> : null}
+                  {data.attachments.map((a) => (
+                    <a key={a.id} href={a.url} target="_blank" rel="noreferrer" title={a.title}>
+                      {a.thumbnail || a.mimetype?.startsWith("image") ? <img src={a.thumbnail || a.url} alt="" />
+                        : <div className="ficon">{(a.extension || ext(a.title)).toUpperCase()}</div>}
                       <span>{a.title}</span>
                     </a>
                   ))}
                 </div>
-              </>
-            )}
-            <div className="actions">
-              <a className="btn primary" href={data.task.url} target="_blank" rel="noreferrer">Open in ClickUp</a>
+              ) : <p className="hint" style={{ marginTop: 0 }}>No attachments yet.</p>}
+              <div style={{ marginTop: 10 }}>
+                <FileDrop queue={queue} blobOn={blobOn} busy={busy} pasted={pasted} />
+              </div>
             </div>
-          </>
+
+            {err && <div className="err">{err}</div>}
+
+            <div className="actions sticky-actions">
+              <button className="btn primary" type="submit" disabled={busy || !dirty}>
+                {saving ? "Saving…" : pendingFiles && !Object.keys(dirtyFields).length ? `Upload ${pendingFiles} file${pendingFiles > 1 ? "s" : ""}` : "Save changes"}
+              </button>
+              {dirty && !busy && <button className="btn" type="button" onClick={() => { fill(data); queue.files.forEach((f) => f.state !== "done" && queue.remove(f.key)); setErr(null); }}>Undo changes</button>}
+              <span className="spacer" />
+              <a className="btn" href={data.task.url} target="_blank" rel="noreferrer">Open in ClickUp</a>
+            </div>
+
+            <div className="danger-zone">
+              {!confirmDelete ? (
+                <button type="button" className="btn danger-ghost" onClick={() => setConfirmDelete(true)} disabled={busy}>Delete subtask</button>
+              ) : (
+                <div className="confirm">
+                  <span>Delete “{data.task.name}” from ClickUp?</span>
+                  <button type="button" className="btn danger" onClick={remove} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
+                  <button type="button" className="btn" onClick={() => setConfirmDelete(false)} disabled={deleting}>Keep it</button>
+                </div>
+              )}
+            </div>
+          </form>
         )}
       </aside>
     </>
   );
 }
 
-// Pulls image/video files out of a paste event (screenshots copied to the clipboard).
-function filesFromClipboard(data: DataTransfer | null): File[] {
-  if (!data) return [];
-  const out: File[] = [];
-  for (const item of Array.from(data.items || [])) {
-    if (item.kind !== "file") continue;
-    const f = item.getAsFile();
-    if (f && (f.type.startsWith("image/") || f.type.startsWith("video/"))) out.push(f);
-  }
-  if (!out.length) {
-    for (const f of Array.from(data.files || [])) {
-      if (f.type.startsWith("image/") || f.type.startsWith("video/")) out.push(f);
-    }
-  }
-  // Clipboard screenshots all arrive as "image.png": give each a unique, readable name.
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-  return out.map((f, i) => {
-    if (f.name && f.name !== "image.png" && f.name !== "image") return f;
-    const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
-    return new File([f], `screenshot-${stamp}${out.length > 1 ? `-${i + 1}` : ""}.${ext}`, { type: f.type });
-  });
-}
+/* ---------------- create panel ---------------- */
 
-function CreateForm({ members, onClose, onCreated }: {
-  members: Person[];
+function CreateForm({ people, onClose, onCreated }: {
+  people: Person[];
   onClose: () => void;
   onCreated: (t: Task, msg: string) => void;
 }) {
@@ -424,121 +839,36 @@ function CreateForm({ members, onClose, onCreated }: {
   const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState("");
   const [assignees, setAssignees] = useState<number[]>([]);
-  const [reporterId, setReporterId] = useState<number | null>(null);
-  const [files, setFiles] = useState<Pending[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [over, setOver] = useState(false);
-  const [blobOn, setBlobOn] = useState(false);
-  const [pasted, setPasted] = useState(0);
-  const input = useRef<HTMLInputElement>(null);
-  const filesRef = useRef<Pending[]>([]);
-  filesRef.current = files;
-
-  useEffect(() => {
-    try {
-      const saved = Number(localStorage.getItem(REPORTER_KEY));
-      if (saved) setReporterId(saved);
-    } catch {}
-    fetch("/api/blob-upload").then((r) => r.json()).then((j) => setBlobOn(Boolean(j.enabled))).catch(() => {});
-    return () => filesRef.current.forEach((f) => URL.revokeObjectURL(f.preview));
-  }, []);
-
-  const add = useCallback((list: FileList | File[]) => {
-    const next = [...list]
-      .filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/"))
-      .map((f) => ({ key: `${f.name}-${f.size}-${Math.random()}`, file: f, preview: URL.createObjectURL(f), progress: 0, state: "idle" as const }));
-    if (next.length) setFiles((p) => [...p, ...next]);
-    return next.length;
-  }, []);
-
-  // Ctrl+V / Cmd+V anywhere while the form is open attaches clipboard images.
-  // Plain text pastes still go into whichever field has focus.
-  useEffect(() => {
-    function onPaste(e: ClipboardEvent) {
-      if (busy) return;
-      const found = filesFromClipboard(e.clipboardData);
-      if (!found.length) return;
-      e.preventDefault();
-      const n = add(found);
-      if (n) setPasted((c) => c + n);
-    }
-    window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, [add, busy]);
-
-  useEffect(() => {
-    if (!pasted) return;
-    const t = setTimeout(() => setPasted(0), 2200);
-    return () => clearTimeout(t);
-  }, [pasted]);
-
-  function patch(key: string, v: Partial<Pending>) {
-    setFiles((p) => p.map((f) => (f.key === key ? { ...f, ...v } : f)));
-  }
-
-  async function uploadOne(taskId: string, p: Pending) {
-    patch(p.key, { state: "up", progress: 5 });
-    if (p.file.size <= SMALL_LIMIT) {
-      const fd = new FormData();
-      fd.append("file", p.file);
-      const r = await fetch(`/api/tasks/${taskId}/attachments`, { method: "POST", body: fd });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
-    } else {
-      if (!blobOn) throw new Error("File over 4 MB: connect a Vercel Blob store to upload large videos");
-      const blob = await upload(`qa/${taskId}/${p.file.name}`, p.file, {
-        access: "public",
-        handleUploadUrl: "/api/blob-upload",
-        onUploadProgress: (e) => patch(p.key, { progress: Math.max(5, Math.round(e.percentage * 0.85)) }),
-      });
-      patch(p.key, { progress: 90 });
-      const r = await fetch(`/api/tasks/${taskId}/attachments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ blobUrl: blob.url, filename: p.file.name }),
-      });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
-    }
-    patch(p.key, { state: "done", progress: 100 });
-  }
-
-  const reporter = members.find((m) => m.id === reporterId) || null;
+  const blobOn = useBlobEnabled();
+  const queue = useAttachQueue(blobOn);
+  const pasted = usePasteFiles(!busy, queue.add);
+  const { me, meId, setMeId } = useMe(people);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) { setErr("Add a title for the report."); return; }
-    if (!reporter) { setErr("Pick who is reporting this."); return; }
+    if (!me) { setErr("Pick who is reporting this."); return; }
     setBusy(true); setErr(null);
-    try { localStorage.setItem(REPORTER_KEY, String(reporter.id)); } catch {}
     try {
       const r = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          description: desc,
-          priority: priority || undefined,
-          assignees,
-          reporterId: reporter.id,
-          reporter: reporter.username,
-        }),
+        body: JSON.stringify({ name, description: desc, priority: priority || undefined, assignees, reporter: me.username }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "Couldn't create the subtask");
       const task: Task = j.task;
-
-      let failed = 0;
-      for (const p of files) {
-        try { await uploadOne(task.id, p); }
-        catch (e: any) { failed++; patch(p.key, { state: "fail", error: e.message }); }
-      }
+      const n = queue.files.length;
+      const failed = await queue.uploadAll(task.id);
       if (failed) {
-        setErr(`Subtask created on ClickUp, but ${failed} attachment(s) didn't upload. Add them from ClickUp.`);
+        setErr(`Subtask created on ClickUp, but ${failed} file(s) didn't upload. Open the subtask to add them again.`);
         setBusy(false);
         onCreated(task, "Subtask created, some attachments missing");
         return;
       }
-      onCreated(task, files.length ? `Subtask created with ${files.length} attachment(s)` : "Subtask created on ClickUp");
+      onCreated(task, n ? `Subtask created with ${n} attachment(s)` : "Subtask created on ClickUp");
     } catch (e: any) {
       setErr(e.message);
       setBusy(false);
@@ -562,82 +892,25 @@ function CreateForm({ members, onClose, onCreated }: {
             <textarea className="textarea" value={desc} onChange={(e) => setDesc(e.target.value)}
               placeholder={"What happens, what you expected, how to reproduce it.\nMarkdown supported."} />
           </label>
-          <div className="field">
-            <span>Reported by</span>
-            {members.length ? (
-              <div className="chips" role="radiogroup" aria-label="Reported by">
-                {members.map((m) => (
-                  <button type="button" key={m.id} className="chip" role="radio"
-                    aria-checked={reporterId === m.id} aria-pressed={reporterId === m.id}
-                    onClick={() => setReporterId(m.id)}>
-                    <Avatar p={m} />{m.username}
-                  </button>
-                ))}
-              </div>
-            ) : <p className="hint">Loading team members…</p>}
-            <div className="hint">Remembered on this device for your next reports.</div>
+          <div className="grid2">
+            <div className="field">
+              <span>Reported by</span>
+              <PeoplePicker people={people} value={meId ? [meId] : []} onChange={(ids) => setMeId(ids[0] ?? null)}
+                multiple={false} placeholder="Pick yourself" label="Reported by" disabled={busy} />
+              <div className="hint">Remembered on this device.</div>
+            </div>
+            <div className="field">
+              <span>Assign to</span>
+              <AssigneeField people={people} value={assignees} onChange={setAssignees} me={me} disabled={busy} />
+            </div>
           </div>
           <div className="field">
             <span>Priority</span>
-            <div className="chips">
-              <button type="button" className="chip" style={{ paddingLeft: 10 }} aria-pressed={!priority} onClick={() => setPriority("")}>None</button>
-              {PRIORITIES.map((p) => (
-                <button type="button" key={p.v} className="chip" style={{ paddingLeft: 10 }} aria-pressed={priority === p.v} onClick={() => setPriority(p.v)}>
-                  <span className="dot" style={{ background: p.color }} />{p.label}
-                </button>
-              ))}
-            </div>
+            <PriorityChips value={priority} onChange={setPriority} disabled={busy} />
           </div>
-          {members.length > 0 && (
-            <div className="field">
-              <span>Assign to</span>
-              <div className="chips">
-                {members.map((m) => (
-                  <button type="button" key={m.id} className="chip" aria-pressed={assignees.includes(m.id)}
-                    onClick={() => setAssignees((a) => (a.includes(m.id) ? a.filter((x) => x !== m.id) : [...a, m.id]))}>
-                    <Avatar p={m} />{m.username}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
           <div className="field">
-            <span>Images and videos</span>
-            <div
-              className={`drop${over ? " over" : ""}${pasted ? " over" : ""}`}
-              role="button" tabIndex={0}
-              onClick={() => input.current?.click()}
-              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && input.current?.click()}
-              onDragOver={(e) => { e.preventDefault(); setOver(true); }}
-              onDragLeave={() => setOver(false)}
-              onDrop={(e) => { e.preventDefault(); setOver(false); add(e.dataTransfer.files); }}
-            >
-              {pasted
-                ? `Pasted ${pasted} image${pasted > 1 ? "s" : ""} from the clipboard`
-                : <>Paste screenshots with <kbd>Ctrl</kbd>+<kbd>V</kbd>, drop files here, or click to browse</>}
-              <div className="hint">
-                Paste works anywhere in this form, as many times as you like.{" "}
-                {blobOn ? "Videos up to 1 GB." : "Up to 4 MB per file; large videos need a Vercel Blob store."}
-              </div>
-            </div>
-            <input ref={input} type="file" accept="image/*,video/*" multiple hidden onChange={(e) => { if (e.target.files) add(e.target.files); e.target.value = ""; }} />
-            {files.length > 0 && (
-              <div className="files">
-                {files.map((f) => (
-                  <div key={f.key} className={`file${f.state === "done" ? " done" : ""}${f.state === "fail" ? " fail" : ""}`} title={f.error || f.file.name}>
-                    {f.file.type.startsWith("video/") ? <video src={f.preview} muted /> : <img src={f.preview} alt="" />}
-                    <div className="fn">{f.file.name} · {fmtSize(f.file.size)}</div>
-                    <div className="bar" style={{ width: `${f.progress}%` }} />
-                    {f.state === "idle" && !busy && (
-                      <button type="button" className="x" aria-label={`Remove ${f.file.name}`} onClick={() => {
-                        URL.revokeObjectURL(f.preview);
-                        setFiles((p) => p.filter((x) => x.key !== f.key));
-                      }}>×</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            <span>Attachments</span>
+            <FileDrop queue={queue} blobOn={blobOn} busy={busy} pasted={pasted} />
           </div>
           {err && <div className="err">{err}</div>}
           <div className="actions">
