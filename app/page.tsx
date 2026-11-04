@@ -669,6 +669,7 @@ function Detail({ id, people, statuses, onClose, onUpdated, onDeleted }: {
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return; // Escape already handled (e.g. closing a dropdown)
       if (e.key === "Escape" && !saving && !deleting) {
         if (dirty && !confirm("Discard your unsaved changes?")) return;
         onClose();
